@@ -1,0 +1,12 @@
+# Secretos — nunca subir a GitHub
+.streamlit/secrets.toml
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+
+# ChromaDB (ya no se usa, pero por si acaso)
+chroma_db/
+*.sqlite3
