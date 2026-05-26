@@ -19,7 +19,7 @@ El sistema responde **únicamente con información del catálogo institucional**
 
 ## Demo
 
-🔗 **[Acceder al simulador →](https://share.streamlit.io)**  
+🔗 **[Acceder al simulador →](https://asistente-ia-materias-uap-ewgj6h2rmnedppwdnjhs7m.streamlit.app/)**  
 _(link disponible una vez desplegado en Streamlit Community Cloud)_
 
 ---
