@@ -124,8 +124,9 @@ if prompt:
     # Construir historial para Gemini
     historial_gemini = []
     for msg in st.session_state.mensajes[:-1]:  # todos menos el último
+        rol = "model" if msg["role"] == "assistant" else "user"
         historial_gemini.append({
-            "role": msg["role"],
+            "role": rol,
             "parts": [msg["content"]]
         })
 
