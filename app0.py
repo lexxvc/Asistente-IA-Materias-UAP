@@ -2,9 +2,6 @@ import streamlit as st
 import google.generativeai as genai
 import os
 import glob
-import re
-import math
-from collections import Counter
 
 # ─── Configuración de página ───────────────────────────────────────────────
 st.set_page_config(
@@ -23,86 +20,27 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ─── Carga de documentos ───────────────────────────────────────────────────
+# ─── Carga de base de conocimiento ─────────────────────────────────────────
 @st.cache_data(show_spinner="Cargando base de conocimiento...")
-def cargar_documentos(ruta: str = "conocimiento") -> list:
-    """Carga cada MD como documento independiente con metadatos."""
+def cargar_conocimiento(ruta: str = "conocimiento") -> str:
+    """
+    Lee todos los archivos .md de la carpeta conocimiento/ y los concatena.
+    Se ejecuta una sola vez gracias a @st.cache_data.
+    """
     archivos = glob.glob(f"{ruta}/**/*.md", recursive=True)
     archivos = sorted([a for a in archivos if "README" not in a])
-    docs = []
+
+    bloques = []
     for archivo in archivos:
         try:
             with open(archivo, "r", encoding="utf-8") as f:
                 contenido = f.read().strip()
-            if not contenido:
-                continue
-            titulo = os.path.splitext(os.path.basename(archivo))[0].replace("_", " ")
-            area = os.path.basename(os.path.dirname(archivo)).replace("_", " ")
-            docs.append({"titulo": titulo, "area": area, "contenido": contenido})
+            if contenido:
+                bloques.append(contenido)
         except Exception:
             pass
-    return docs
 
-
-# ─── RAG ligero: TF-IDF sin dependencias externas ─────────────────────────
-def tokenizar(texto: str) -> list:
-    texto = texto.lower()
-    for a, b in [("á","a"),("é","e"),("í","i"),("ó","o"),("ú","u"),("ü","u"),("ñ","n")]:
-        texto = texto.replace(a, b)
-    return re.findall(r"\b[a-z]{3,}\b", texto)
-
-STOPWORDS = {
-    "que","como","para","una","uno","los","las","del","por","con","son","sus",
-    "mas","pero","este","esta","sobre","tiene","pueden","cada","entre","cuando",
-    "tambien","hay","ser","han","sido","esta","sin","todo","todos","puede",
-    "cuales","cual","donde","quien","quiero","quisiera","busco","dame","dime",
-    "tengo","necesito","ayuda","favor","gracias","hola","buenas","materia",
-    "materias","maestria","maestrias","universidad","anahuac","uap","alumno",
-}
-
-@st.cache_data(show_spinner=False)
-def construir_indice(doc_keys: tuple) -> dict:
-    """Construye índice TF-IDF. Recibe tuple de (titulo, area, contenido) para ser cacheable."""
-    N = len(doc_keys)
-    df = Counter()
-    doc_token_sets = []
-    for titulo, area, contenido in doc_keys:
-        tokens = set(tokenizar(titulo + " " + area + " " + contenido)) - STOPWORDS
-        df.update(tokens)
-        doc_token_sets.append(tokens)
-    idf = {t: math.log(N / (1 + df[t])) for t in df}
-    return {"idf": idf, "doc_tokens": doc_token_sets}
-
-
-def recuperar_relevantes(pregunta: str, docs: list, indice: dict, top_k: int = 8) -> list:
-    """Devuelve los top_k documentos más relevantes para la pregunta."""
-    q_tokens = [t for t in tokenizar(pregunta) if t not in STOPWORDS]
-    if not q_tokens:
-        return docs[:top_k]
-
-    idf = indice["idf"]
-    doc_tokens = indice["doc_tokens"]
-    scores = []
-
-    for i, doc in enumerate(docs):
-        score = sum(idf.get(t, 0) for t in q_tokens if t in doc_tokens[i])
-        # Bonus por coincidencia en título o área
-        titulo_area_tokens = set(tokenizar(doc["titulo"] + " " + doc["area"]))
-        bonus = sum(2.5 for t in q_tokens if t in titulo_area_tokens)
-        scores.append(score + bonus)
-
-    ranked = sorted(range(len(docs)), key=lambda i: scores[i], reverse=True)
-    top = [docs[i] for i in ranked[:top_k] if scores[i] > 0]
-    return top if top else docs[:top_k]
-
-
-def formatear_contexto(docs_relevantes: list) -> str:
-    """Formatea los documentos recuperados para el prompt."""
-    bloques = []
-    for doc in docs_relevantes:
-        bloques.append(f"[ÁREA: {doc['area']}]\n{doc['contenido']}")
     return "\n\n---\n\n".join(bloques)
-
 
 # ─── System prompt ──────────────────────────────────────────────────────────
 SYSTEM_PROMPT = """Eres un asistente académico de la Universidad Anáhuac Puebla (UAP), especializado en orientar a los alumnos de maestría en la selección de materias y construcción de su trayectoria académica.
@@ -126,8 +64,8 @@ REGLAS ESTRICTAS:
 9. No actúes como asesor comercial ni prometas admisiones o inscripciones.
 10. Menciona siempre el área de conocimiento de cada materia que recomiendes.
 
-MATERIAS RELEVANTES PARA ESTA CONSULTA:
-{contexto}"""
+BASE DE CONOCIMIENTO:
+{base_conocimiento}"""
 
 # ─── Inicialización ─────────────────────────────────────────────────────────
 api_key = st.secrets.get("GEMINI_API_KEY", os.environ.get("GEMINI_API_KEY", ""))
@@ -138,11 +76,8 @@ if not api_key:
 
 genai.configure(api_key=api_key)
 
-# Cargar docs e índice una sola vez (cacheado)
-todos_los_docs = cargar_documentos()
-indice = construir_indice(tuple(
-    (d["titulo"], d["area"], d["contenido"]) for d in todos_los_docs
-))
+base_conocimiento = cargar_conocimiento()
+system_prompt_completo = SYSTEM_PROMPT.format(base_conocimiento=base_conocimiento)
 
 # ─── UI: encabezado ─────────────────────────────────────────────────────────
 st.markdown("## 🎓 Simulador de Trayectoria Académica")
@@ -186,22 +121,14 @@ if prompt:
     with st.chat_message("user", avatar="👤"):
         st.markdown(prompt)
 
-    # Recuperar solo los docs relevantes para esta pregunta
-    # Combinar pregunta actual + últimos 2 intercambios para mejor contexto conversacional
-    contexto_busqueda = prompt
-    if len(st.session_state.mensajes) > 2:
-        ultimos = st.session_state.mensajes[-3:-1]
-        contexto_busqueda = " ".join(m["content"] for m in ultimos) + " " + prompt
-
-    docs_relevantes = recuperar_relevantes(contexto_busqueda, todos_los_docs, indice, top_k=8)
-    contexto_formateado = formatear_contexto(docs_relevantes)
-    system_prompt_completo = SYSTEM_PROMPT.format(contexto=contexto_formateado)
-
     # Construir historial para Gemini
     historial_gemini = []
-    for msg in st.session_state.mensajes[:-1]:
+    for msg in st.session_state.mensajes[:-1]:  # todos menos el último
         rol = "model" if msg["role"] == "assistant" else "user"
-        historial_gemini.append({"role": rol, "parts": [msg["content"]]})
+        historial_gemini.append({
+            "role": rol,
+            "parts": [msg["content"]]
+        })
 
     # Llamada a Gemini
     with st.chat_message("assistant", avatar="🎓"):
