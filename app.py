@@ -7,23 +7,105 @@ import time
 # ─── Configuración de página ───────────────────────────────────────────────
 st.set_page_config(
     page_title="Asistente Virtual UAP",
-    page_icon="🎓",
+    page_icon="🦁",
     layout="centered",
     initial_sidebar_state="collapsed",
 )
 
 # ─── Detectar modo embed (para iframe en micrositio) ───────────────────────
-# El micrositio puede embeber la app con: <iframe src="URL/?embed=true">
 EMBED = st.query_params.get("embed", "false").lower() == "true"
 
-# ─── Estilos ────────────────────────────────────────────────────────────────
-estilos = """
+# ─── Identidad visual Universidad Anáhuac ───────────────────────────────────
+# Colores oficiales (Manual de Imagen Institucional):
+#   Naranja  PANTONE 151 C  → #F38B00   (el sol, lo divino)
+#   Café     PANTONE 469 C  → #6E4A2A   (la tierra, lo humano)
+ANAHUAC_NARANJA = "#F38B00"
+ANAHUAC_NARANJA_OSC = "#D97A00"
+ANAHUAC_CAFE = "#6E4A2A"
+ANAHUAC_CAFE_OSC = "#4A3019"
+
+estilos = f"""
 <style>
-    .block-container { max-width: 780px; padding-top: 2rem; }
-    .stChatMessage { border-radius: 12px; }
+    @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700&display=swap');
+
+    html, body, [class*="css"] {{
+        font-family: 'Montserrat', sans-serif;
+    }}
+    .block-container {{ max-width: 800px; padding-top: 1.5rem; }}
+
+    /* Header institucional */
+    .uap-header {{
+        background: linear-gradient(135deg, {ANAHUAC_NARANJA} 0%, {ANAHUAC_NARANJA_OSC} 100%);
+        border-radius: 16px;
+        padding: 1.5rem 1.75rem;
+        margin-bottom: 1.25rem;
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        box-shadow: 0 4px 18px rgba(243, 139, 0, 0.25);
+    }}
+    .uap-logo {{
+        width: 56px; height: 56px;
+        background: #fff;
+        border-radius: 50%;
+        display: flex; align-items: center; justify-content: center;
+        font-size: 30px;
+        flex-shrink: 0;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+    }}
+    .uap-title {{ color: #fff; }}
+    .uap-title h1 {{
+        font-size: 1.35rem; font-weight: 700; margin: 0; line-height: 1.2;
+        color: #fff;
+    }}
+    .uap-title p {{
+        font-size: 0.85rem; margin: 2px 0 0; opacity: 0.95; font-weight: 400;
+        color: #fff;
+    }}
+
+    /* Mensajes del chat */
+    .stChatMessage {{ border-radius: 14px; }}
+
+    /* Burbujas del usuario con tono institucional */
+    [data-testid="stChatMessageContent"] {{ font-size: 0.97rem; }}
+
+    /* Botones */
+    .stButton button {{
+        border-radius: 10px;
+        border: 1.5px solid {ANAHUAC_NARANJA};
+        color: {ANAHUAC_CAFE_OSC};
+        background: #fff;
+        font-weight: 500;
+        transition: all 0.15s ease;
+    }}
+    .stButton button:hover {{
+        background: {ANAHUAC_NARANJA};
+        color: #fff;
+        border-color: {ANAHUAC_NARANJA};
+    }}
+
+    /* Input del chat */
+    [data-testid="stChatInput"] {{
+        border-radius: 12px;
+    }}
+    [data-testid="stChatInput"]:focus-within {{
+        border-color: {ANAHUAC_NARANJA} !important;
+    }}
+
+    /* Caption del footer */
+    .uap-footer {{
+        font-size: 0.78rem; color: {ANAHUAC_CAFE};
+        text-align: center; margin-top: 1.5rem; opacity: 0.85;
+    }}
+    .uap-footer strong {{ color: {ANAHUAC_CAFE_OSC}; }}
+
+    /* Chips de sugerencias */
+    .sug-label {{
+        color: {ANAHUAC_CAFE_OSC}; font-weight: 600;
+        font-size: 0.92rem; margin-bottom: 0.4rem;
+    }}
 """
 if EMBED:
-    # En modo embed se ocultan elementos de Streamlit para integrarse al micrositio
     estilos += """
     header[data-testid="stHeader"] { display: none; }
     #MainMenu { visibility: hidden; }
@@ -35,13 +117,12 @@ st.markdown(estilos, unsafe_allow_html=True)
 
 # ─── Constantes ──────────────────────────────────────────────────────────────
 MODELO = "models/gemini-2.5-flash"
-MAX_TURNOS_HISTORIAL = 12   # límite de mensajes enviados al modelo (controla costo)
+MAX_TURNOS_HISTORIAL = 12
 MAX_REINTENTOS = 2
 
 # ─── Carga de base de conocimiento ─────────────────────────────────────────
 @st.cache_data(show_spinner="Cargando base de conocimiento...")
 def cargar_carpeta(ruta: str) -> str:
-    """Lee todos los .md de una carpeta (recursivo) y los concatena."""
     archivos = glob.glob(f"{ruta}/**/*.md", recursive=True)
     archivos = sorted([a for a in archivos if "README" not in a])
     bloques = []
@@ -58,10 +139,8 @@ def cargar_carpeta(ruta: str) -> str:
 
 @st.cache_data(show_spinner=False)
 def construir_base_completa() -> str:
-    """Une el catálogo de materias y la información administrativa."""
     materias = cargar_carpeta("conocimiento")
     administrativo = cargar_carpeta("conocimiento_administrativo")
-
     secciones = []
     if materias:
         secciones.append("=== CATÁLOGO DE MATERIAS ===\n\n" + materias)
@@ -109,12 +188,21 @@ genai.configure(api_key=api_key)
 base_conocimiento = construir_base_completa()
 system_prompt_completo = SYSTEM_PROMPT.format(base_conocimiento=base_conocimiento)
 
-# ─── UI: encabezado ─────────────────────────────────────────────────────────
+# ─── Header institucional ────────────────────────────────────────────────────
+# Para usar el logo oficial: coloca 'logo_anahuac.png' en la carpeta del proyecto
+# y reemplaza el emoji 🦁 por: st.image("logo_anahuac.png", width=56)
+st.markdown(f"""
+<div class="uap-header">
+    <div class="uap-logo">🦁</div>
+    <div class="uap-title">
+        <h1>Asistente Virtual UAP</h1>
+        <p>Universidad Anáhuac Puebla · Orientación académica y administrativa</p>
+    </div>
+</div>
+""", unsafe_allow_html=True)
+
 if not EMBED:
-    st.markdown("## 🎓 Asistente Virtual UAP")
-    st.markdown("**Universidad Anáhuac Puebla — Maestrías**")
-    st.markdown("Resuelvo tus dudas sobre materias, trayectoria académica y trámites administrativos.")
-    st.divider()
+    st.markdown("Resuelvo tus dudas sobre **materias**, **trayectoria académica** y **trámites administrativos**.")
 
 # ─── Estado de sesión ────────────────────────────────────────────────────────
 if "mensajes" not in st.session_state:
@@ -122,12 +210,13 @@ if "mensajes" not in st.session_state:
 
 # ─── Mostrar historial ───────────────────────────────────────────────────────
 for msg in st.session_state.mensajes:
-    with st.chat_message(msg["role"], avatar="🎓" if msg["role"] == "assistant" else "👤"):
+    avatar = "🦁" if msg["role"] == "assistant" else "👤"
+    with st.chat_message(msg["role"], avatar=avatar):
         st.markdown(msg["content"])
 
 # ─── Preguntas sugeridas (solo al inicio) ───────────────────────────────────
 if not st.session_state.mensajes:
-    st.markdown("**Puedes empezar con alguna de estas preguntas:**")
+    st.markdown('<p class="sug-label">Puedes empezar con alguna de estas preguntas:</p>', unsafe_allow_html=True)
     sugerencias = [
         "¿Qué materias hay sobre inteligencia artificial y datos?",
         "¿Qué materia me recomiendas si me interesa el liderazgo?",
@@ -157,15 +246,13 @@ if prompt:
     with st.chat_message("user", avatar="👤"):
         st.markdown(prompt)
 
-    # Historial limitado a los últimos N turnos (controla costo y contexto)
     mensajes_recientes = st.session_state.mensajes[-MAX_TURNOS_HISTORIAL:]
     historial_gemini = []
     for msg in mensajes_recientes[:-1]:
         rol = "model" if msg["role"] == "assistant" else "user"
         historial_gemini.append({"role": rol, "parts": [msg["content"]]})
 
-    # Llamada a Gemini con streaming y reintentos
-    with st.chat_message("assistant", avatar="🎓"):
+    with st.chat_message("assistant", avatar="🦁"):
         placeholder = st.empty()
         respuesta = ""
 
@@ -184,11 +271,10 @@ if prompt:
                         respuesta += chunk.text
                         placeholder.markdown(respuesta + "▌")
                 placeholder.markdown(respuesta)
-                break  # éxito
-
-            except Exception as e:
+                break
+            except Exception:
                 if intento < MAX_REINTENTOS:
-                    time.sleep(1.5 * (intento + 1))  # backoff
+                    time.sleep(1.5 * (intento + 1))
                     continue
                 respuesta = (
                     "⚠️ Hubo un problema al generar la respuesta. "
@@ -200,8 +286,9 @@ if prompt:
 
 # ─── Footer ─────────────────────────────────────────────────────────────────
 if not EMBED:
-    st.divider()
-    st.caption(
-        "Asistente basado en la base de conocimiento oficial de la UAP · "
-        "Solo responde con información disponible en el catálogo y documentos institucionales."
+    st.markdown(
+        '<div class="uap-footer">Asistente basado en la base de conocimiento oficial de la '
+        '<strong>Universidad Anáhuac Puebla</strong>.<br>Solo responde con información disponible '
+        'en el catálogo y documentos institucionales.</div>',
+        unsafe_allow_html=True
     )
