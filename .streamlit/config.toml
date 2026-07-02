@@ -1,0 +1,8 @@
+[theme]
+# Colores institucionales Red Anáhuac
+# Naranja Pantone 151 C / Café Pantone 469 C
+primaryColor = "#FF8200"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#FBF5EF"
+textColor = "#3D2B1F"
+font = "sans serif"
