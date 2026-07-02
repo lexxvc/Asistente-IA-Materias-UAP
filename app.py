@@ -385,6 +385,6 @@ if not EMBED:
     st.markdown(
         '<div class="uap-footer">Asistente basado en la base de conocimiento oficial de la '
         '<strong>Universidad Anáhuac Puebla</strong>. Orientación informativa, no vinculante.<br>'
-        'Para trámites oficiales acude a servicios escolares.</div>',
+        'Para trámites oficiales acude a servicios escolares y siempre acude a tu coordinador académico para aclarar dudas.</div>',
         unsafe_allow_html=True
     )
