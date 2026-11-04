@@ -1,11 +1,12 @@
 import streamlit as st
-import google.generativeai as genai
-from google.generativeai import caching
+from google import genai
+from google.genai import types
 import os
-import glob
 import time
 import uuid
 import datetime
+
+import base_conocimiento as bc
 
 # ─── Configuración de página ───────────────────────────────────────────────
 st.set_page_config(
@@ -69,77 +70,26 @@ estilos += "</style>"
 st.markdown(estilos, unsafe_allow_html=True)
 
 # ─── Constantes de configuración ─────────────────────────────────────────────
-MODELO = "models/gemini-2.5-flash"
+MODELO = "gemini-2.5-flash"
 MAX_TURNOS_HISTORIAL = 12       # mensajes máximos enviados al modelo
 MAX_REINTENTOS = 2
 MAX_PREGUNTAS_SESION = 20       # límite anti-abuso por sesión
 CACHE_TTL_MINUTOS = 60          # vida del caché de contexto de Gemini
 USAR_CACHE = True               # poner False para desactivar caché explícito
+MOSTRAR_TOKENS = True           # contador de tokens bajo el cuadro de pregunta
 
 # ─── Carga de base de conocimiento ─────────────────────────────────────────
+# Toda la lógica (índice general, fichas, system prompt, contexto de fecha)
+# vive en base_conocimiento.py, compartida con la evaluación.
 @st.cache_data(show_spinner="Cargando base de conocimiento...")
-def cargar_carpeta(ruta: str) -> str:
-    archivos = glob.glob(f"{ruta}/**/*.md", recursive=True)
-    archivos = sorted([a for a in archivos if "README" not in a])
-    bloques = []
-    for archivo in archivos:
-        try:
-            with open(archivo, "r", encoding="utf-8") as f:
-                contenido = f.read().strip()
-            if contenido:
-                bloques.append(contenido)
-        except Exception:
-            pass
-    return "\n\n---\n\n".join(bloques)
+def obtener_system_prompt() -> str:
+    return bc.system_prompt_completo()
 
 
 @st.cache_data(show_spinner=False)
-def construir_base_completa() -> str:
-    materias = cargar_carpeta("conocimiento")
-    administrativo = cargar_carpeta("conocimiento_administrativo")
-    secciones = []
-    if materias:
-        secciones.append("=== CATÁLOGO DE MATERIAS ===\n\n" + materias)
-    if administrativo:
-        secciones.append("=== INFORMACIÓN ADMINISTRATIVA Y TRÁMITES ===\n\n" + administrativo)
-    return "\n\n\n".join(secciones)
+def listar_maestrias() -> list:
+    return bc.listar_maestrias(bc.cargar_fichas())
 
-
-@st.cache_data(show_spinner=False)
-def listar_areas() -> list:
-    """Lista las áreas de conocimiento a partir de las carpetas."""
-    carpetas = [d for d in glob.glob("conocimiento/*/") if "README" not in d]
-    areas = sorted(os.path.basename(c.rstrip("/")).replace("_", " ").title() for c in carpetas)
-    return areas
-
-
-# ─── System prompt ──────────────────────────────────────────────────────────
-SYSTEM_PROMPT = """Eres el Asistente Virtual de la Universidad Anáhuac Puebla (UAP). Atiendes a alumnos de maestría en dos tipos de consultas:
-
-A) ACADÉMICAS: orientación en la selección de materias y construcción de trayectoria académica.
-B) ADMINISTRATIVAS: trámites, servicios escolares, pagos, becas, calendario y procesos institucionales.
-
-REGLAS ESTRICTAS:
-1. Responde SOLO con información presente en la base de conocimiento.
-2. Si la información no está disponible, di: "Esta información no está disponible en mi base de conocimiento. Te sugiero contactar directamente a servicios escolares de la UAP." — y no inventes nada.
-3. Usa lenguaje claro, cercano y orientado a la acción.
-4. Sé conciso: máximo 4 párrafos, salvo que el alumno pida una comparación extensa o tabla.
-5. Nunca inventes fechas, horarios, docentes, costos, cupos, requisitos ni procedimientos que no estén en la base.
-6. Si el alumno pide recomendación de materias y no has recibido su perfil, pregunta primero por:
-   - Maestría o programa que cursa
-   - Materias ya cursadas
-   - Objetivo profesional
-   - Preferencia de modalidad (presencial, híbrida, en línea)
-   - Intereses principales
-7. Cuando recomiendes materias, justifica con criterios explícitos del contexto: área temática, modalidad, nivel técnico, perfil recomendado.
-8. Si varias materias aplican, presenta: primera opción, segunda opción y alternativa, con breve justificación.
-9. Menciona siempre el área de conocimiento de cada materia que recomiendes.
-10. En temas administrativos, indica claramente los pasos y requisitos tal como aparecen en la base. Si un trámite requiere atención presencial o de un área específica, indícalo.
-11. No actúes como asesor comercial ni prometas admisiones, inscripciones o resultados de trámites.
-12. La orientación que das es informativa, no vinculante ni oficial.
-
-BASE DE CONOCIMIENTO:
-{base_conocimiento}"""
 
 # ─── Inicialización ─────────────────────────────────────────────────────────
 api_key = st.secrets.get("GEMINI_API_KEY", os.environ.get("GEMINI_API_KEY", ""))
@@ -147,41 +97,76 @@ if not api_key:
     st.error("⚠️ No se encontró la API key de Gemini. Agrégala en `.streamlit/secrets.toml`.")
     st.stop()
 
-genai.configure(api_key=api_key)
+@st.cache_resource(show_spinner=False)
+def obtener_cliente(key: str) -> genai.Client:
+    return genai.Client(api_key=key)
 
-base_conocimiento = construir_base_completa()
-system_prompt_completo = SYSTEM_PROMPT.format(base_conocimiento=base_conocimiento)
+
+cliente = obtener_cliente(api_key)
+
+system_prompt_completo = obtener_system_prompt()
 
 # ─── Caché de contexto de Gemini (ahorro ~90% en tokens de entrada) ─────────
-# La base de conocimiento (~100k tokens) se sube UNA vez al caché de Google.
+# La base de conocimiento (~55k tokens: índice + 81 fichas) se sube UNA vez al caché de Google.
 # Las siguientes consultas leen del caché a ~10% del precio de entrada normal.
 # El caché expira tras CACHE_TTL_MINUTOS sin recrearse (no cobra storage si expira).
 @st.cache_resource(ttl=(CACHE_TTL_MINUTOS - 5) * 60, show_spinner=False)
 def obtener_cache_contexto():
-    """Crea (o renueva) el caché de contexto compartido por todos los usuarios."""
+    """Crea (o renueva) el caché de contexto compartido por todos los usuarios.
+
+    Devuelve el nombre del caché (p. ej. "cachedContents/abc123") o None.
+    """
     try:
-        cache = caching.CachedContent.create(
+        cache = cliente.caches.create(
             model=MODELO,
-            display_name="base_conocimiento_uap",
-            system_instruction=system_prompt_completo,
-            ttl=datetime.timedelta(minutes=CACHE_TTL_MINUTOS),
+            config=types.CreateCachedContentConfig(
+                display_name="base_conocimiento_uap",
+                system_instruction=system_prompt_completo,
+                ttl=f"{CACHE_TTL_MINUTOS * 60}s",
+            ),
         )
-        return cache
+        return cache.name
     except Exception:
         return None  # fallback: modo sin caché
 
 
-def crear_modelo():
-    """Devuelve el modelo, usando caché de contexto si está disponible."""
+def configuracion_modelo() -> types.GenerateContentConfig:
+    """Usa el caché de contexto si está disponible; si no, manda el system prompt."""
     if USAR_CACHE:
-        cache = obtener_cache_contexto()
-        if cache is not None:
-            try:
-                return genai.GenerativeModel.from_cached_content(cached_content=cache)
-            except Exception:
-                pass
-    # Fallback sin caché
-    return genai.GenerativeModel(model_name=MODELO, system_instruction=system_prompt_completo)
+        nombre_cache = obtener_cache_contexto()
+        if nombre_cache:
+            return types.GenerateContentConfig(cached_content=nombre_cache)
+    return types.GenerateContentConfig(system_instruction=system_prompt_completo)
+
+
+# ─── Conteo de tokens ───────────────────────────────────────────────────────
+def leer_uso(usage) -> dict:
+    """Convierte el usage_metadata de Gemini (llega en el último chunk del stream)."""
+    if usage is None:
+        return {}
+    return {
+        "entrada": usage.prompt_token_count or 0,
+        "cache": usage.cached_content_token_count or 0,
+        "salida": usage.candidates_token_count or 0,
+        # Gemini 2.5 "piensa" antes de responder; esos tokens se cobran como salida
+        "razonamiento": usage.thoughts_token_count or 0,
+    }
+
+
+def _fmt(n: int) -> str:
+    return f"{n:,}".replace(",", " ")
+
+
+def texto_uso(u: dict) -> str:
+    if not u:
+        return ""
+    partes = [f"⬆️ Entrada {_fmt(u['entrada'])}"]
+    if u["cache"]:
+        partes[0] += f" (caché {_fmt(u['cache'])})"
+    partes.append(f"⬇️ Salida {_fmt(u['salida'])}")
+    if u["razonamiento"]:
+        partes.append(f"🧠 Razonamiento {_fmt(u['razonamiento'])}")
+    return " · ".join(partes)
 
 
 # ─── Registro de preguntas en Google Sheets (opcional) ───────────────────────
@@ -258,18 +243,20 @@ if "n_preguntas" not in st.session_state:
     st.session_state.n_preguntas = 0
 if "feedback_dado" not in st.session_state:
     st.session_state.feedback_dado = set()
+if "tokens_sesion" not in st.session_state:
+    st.session_state.tokens_sesion = {"entrada": 0, "cache": 0, "salida": 0, "razonamiento": 0}
 
-# ─── Selector de maestría (punto 10) ────────────────────────────────────────
+# ─── Selector de maestría ───────────────────────────────────────────────────
+# Se pide la maestría (no el área): la obligatoriedad de materias depende de ella.
 if not st.session_state.mensajes:
-    areas = listar_areas()
-    opciones = ["Prefiero no especificar"] + areas + ["Otra"]
+    opciones = ["Prefiero no especificar"] + listar_maestrias() + ["Otra"]
     seleccion = st.selectbox(
-        "🎓 ¿En qué área está tu maestría? (opcional, mejora las recomendaciones)",
+        "🎓 ¿Qué maestría cursas? (opcional, mejora las recomendaciones)",
         opciones,
-        key="selector_area",
+        key="selector_maestria",
     )
     if seleccion == "Otra":
-        otra = st.text_input("Escribe tu maestría o área:", key="otra_maestria")
+        otra = st.text_input("Escribe tu maestría:", key="otra_maestria")
         st.session_state.maestria = otra.strip()
     elif seleccion != "Prefiero no especificar":
         st.session_state.maestria = seleccion
@@ -296,10 +283,12 @@ if not st.session_state.mensajes:
     st.markdown('<p class="sug-label">Puedes empezar con alguna de estas preguntas:</p>', unsafe_allow_html=True)
     sugerencias = [
         "¿Qué materias hay sobre inteligencia artificial y datos?",
-        "¿Qué materia me recomiendas si me interesa el liderazgo?",
-        "¿Qué materias tienen modalidad híbrida o en línea?",
-        "¿Cómo realizo un trámite administrativo?",
+        "¿Qué materias son obligatorias para mi maestría?",
+        "¿Qué materias puedo cursar en línea?",
+        "¿Qué materias abren el próximo periodo?",
     ]
+    if bc.hay_base_administrativa():
+        sugerencias.append("¿Cómo realizo un trámite administrativo?")
     cols = st.columns(2)
     for i, sug in enumerate(sugerencias):
         if cols[i % 2].button(sug, key=f"sug_{i}", use_container_width=True):
@@ -311,6 +300,7 @@ if st.session_state.mensajes:
     if st.button("🔄 Nueva conversación", type="secondary"):
         st.session_state.mensajes = []
         st.session_state.feedback_dado = set()
+        st.session_state.tokens_sesion = {"entrada": 0, "cache": 0, "salida": 0, "razonamiento": 0}
         st.rerun()
 
 # ─── Límite de preguntas por sesión (anti-abuso) ────────────────────────────
@@ -336,37 +326,40 @@ if prompt:
     with st.chat_message("user", avatar="👤"):
         st.markdown(prompt)
 
-    # Perfil del alumno (se inyecta en el mensaje, no en el system prompt,
-    # para no invalidar el caché de contexto compartido)
-    maestria = st.session_state.get("maestria", "")
-    prompt_para_modelo = prompt
-    if maestria:
-        prompt_para_modelo = f"[Contexto: el alumno cursa una maestría del área de {maestria}]\n\n{prompt}"
+    # Fecha, periodo en curso y maestría (se inyectan en el mensaje, no en el
+    # system prompt, para no invalidar el caché de contexto compartido)
+    prompt_para_modelo = bc.contexto_mensaje(prompt, st.session_state.get("maestria", ""))
 
     mensajes_recientes = st.session_state.mensajes[-MAX_TURNOS_HISTORIAL:]
     historial_gemini = []
     for msg in mensajes_recientes[:-1]:
         rol = "model" if msg["role"] == "assistant" else "user"
-        historial_gemini.append({"role": rol, "parts": [msg["content"]]})
+        historial_gemini.append(types.Content(role=rol, parts=[types.Part(text=msg["content"])]))
 
     with st.chat_message("assistant", avatar="🦁"):
         placeholder = st.empty()
         respuesta = ""
+        uso = {}
 
         for intento in range(MAX_REINTENTOS + 1):
             try:
-                model = crear_modelo()
-                chat = model.start_chat(history=historial_gemini)
-                stream = chat.send_message(prompt_para_modelo, stream=True)
-
+                chat = cliente.chats.create(
+                    model=MODELO, config=configuracion_modelo(), history=historial_gemini
+                )
                 respuesta = ""
-                for chunk in stream:
+                usage = None
+                for chunk in chat.send_message_stream(prompt_para_modelo):
                     if chunk.text:
                         respuesta += chunk.text
                         placeholder.markdown(respuesta + "▌")
+                    if chunk.usage_metadata is not None:
+                        usage = chunk.usage_metadata
                 placeholder.markdown(respuesta)
+                uso = leer_uso(usage)
                 break
             except Exception:
+                # Si el caché expiró o quedó inválido, se recrea en el siguiente intento
+                obtener_cache_contexto.clear()
                 if intento < MAX_REINTENTOS:
                     time.sleep(1.5 * (intento + 1))
                     continue
@@ -376,9 +369,23 @@ if prompt:
                 )
                 placeholder.markdown(respuesta)
 
-    st.session_state.mensajes.append({"role": "assistant", "content": respuesta})
+    st.session_state.mensajes.append({"role": "assistant", "content": respuesta, "uso": uso})
+    for k in st.session_state.tokens_sesion:
+        st.session_state.tokens_sesion[k] += uso.get(k, 0)
     log_evento("pregunta", prompt, respuesta)
     st.rerun()  # re-render para mostrar el widget de feedback
+
+# ─── Contador de tokens (bajo el cuadro de pregunta) ────────────────────────
+if MOSTRAR_TOKENS:
+    ultimo = next((m.get("uso") for m in reversed(st.session_state.mensajes)
+                   if m["role"] == "assistant" and m.get("uso")), None)
+    if ultimo:
+        t = st.session_state.tokens_sesion
+        linea = (f"**Última pregunta:** {texto_uso(ultimo)}  \n"
+                 f"**Sesión:** ⬆️ {_fmt(t['entrada'])} · ⬇️ {_fmt(t['salida'] + t['razonamiento'])}")
+        # Zona fija bajo el chat_input: st.bottom (Streamlit reciente) o _bottom (versiones previas)
+        destino = getattr(st, "bottom", None) or getattr(st, "_bottom", None)
+        (destino.caption if destino is not None else st.caption)(linea)
 
 # ─── Footer ─────────────────────────────────────────────────────────────────
 if not EMBED:

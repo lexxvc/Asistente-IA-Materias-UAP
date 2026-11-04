@@ -12,7 +12,7 @@
 | **Nombre** | Empresas, clústeres, desarrollo económico y social |
 | **Área de conocimiento** | Economía y finanzas |
 | **Obligatoria** | ✅ Sí |
-| **Obligatoria para** | Maestría en Estrategia y Dirección de Empresas, Maestría en Finanzas Estratégicas y Análisis de Negocios |
+| **Obligatoria para** | Maestría en Estrategia y Dirección de Empresas; Maestría en Finanzas Estratégicas y Análisis de Negocios |
 | **Periodo de apertura** | Cada año en Primavera (enero – mayo) y Otoño (agosto – diciembre). Ciclos programados 2026–2029: Primavera 2026, Otoño 2026, Primavera 2027, Otoño 2027, Primavera 2028, Otoño 2028, Primavera 2029, Otoño 2029. |
 | **Nivel técnico** | Intermedio |
 | **Modalidad** | Híbrida |

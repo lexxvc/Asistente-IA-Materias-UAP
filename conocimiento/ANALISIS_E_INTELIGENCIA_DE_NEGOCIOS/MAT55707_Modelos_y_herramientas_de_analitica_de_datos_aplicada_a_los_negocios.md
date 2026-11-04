@@ -12,7 +12,7 @@
 | **Nombre** | Modelos y herramientas de analítica de datos aplicada a los negocios |
 | **Área de conocimiento** | Análisis e inteligencia de negocios |
 | **Obligatoria** | ✅ Sí |
-| **Obligatoria para** | Maestría en Finanzas Estratégicas y Análisis de Negocios, Maestría en Innovación, Emprendimiento y Dirección de Tecnología |
+| **Obligatoria para** | Maestría en Finanzas Estratégicas y Análisis de Negocios; Maestría en Innovación, Emprendimiento y Dirección de Tecnología |
 | **Periodo de apertura** | Cada año en Otoño (agosto – diciembre). Ciclos programados 2026–2029: Otoño 2026, Otoño 2027, Otoño 2028, Otoño 2029. |
 | **Nivel técnico** | Intermedio |
 | **Modalidad** | Híbrida |

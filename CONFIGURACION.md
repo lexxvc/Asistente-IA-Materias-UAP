@@ -93,11 +93,23 @@ Antes de publicar cualquier cambio de prompt, modelo o base de conocimiento:
 
 ```bash
 export GEMINI_API_KEY="tu_key"      # en Windows: set GEMINI_API_KEY=tu_key
-python evaluacion/eval_preguntas.py
+python evaluacion/eval_preguntas.py           # todas
+python evaluacion/eval_preguntas.py 10 26 28  # solo algunas, por id
 ```
 
-Genera `evaluacion/resultados_FECHA.md` con las 25 preguntas de prueba y sus
-respuestas. Revísalas manualmente y marca cada una:
+Usa exactamente el mismo prompt, índice y contexto de fecha que producción
+(`base_conocimiento.py`). Genera `evaluacion/resultados_FECHA.md` con las 30
+preguntas, una tabla resumen y el resultado de las **verificaciones automáticas**
+(✅ pasa / ❌ falla / 👁️ revisión manual). El script termina con código de error
+si alguna verificación falla.
+
+Las verificaciones se definen por pregunta en `preguntas_prueba.json`:
+`debe_contener`, `debe_contener_alguno` y `no_debe_contener` (sin distinguir
+mayúsculas ni acentos). También se puede simular la maestría (`maestria`) y una
+conversación previa (`historial`).
+
+Las verificaciones solo buscan palabras clave, así que revisa también cada
+respuesta y márcala:
 - ✅ correcta
 - ⚠️ mejorable
 - ❌ alucinación (fallo crítico — NO publicar hasta corregir)
@@ -116,12 +128,13 @@ asistente NUNCA debe confirmar costos, horarios o docentes que no están en la b
 | `MAX_TURNOS_HISTORIAL` | 12 | Mensajes enviados al modelo |
 | `CACHE_TTL_MINUTOS` | 60 | Vida del caché de contexto |
 | `USAR_CACHE` | True | Activa/desactiva caché explícito |
+| `MOSTRAR_TOKENS` | True | Contador de tokens bajo el cuadro de pregunta (ponlo en False para alumnos) |
 
 ### Nota sobre el caché de contexto
 
 El caché reduce ~90% el costo de tokens de entrada, pero Google cobra
 almacenamiento (~$1 USD por millón de tokens por hora mientras el caché viva).
-Con la base actual (~100k tokens) el storage cuesta ~$0.10 USD/hora activa.
+Con la base actual (~55k tokens) el storage cuesta ~$0.06 USD/hora activa.
 
 - **Con tráfico constante** (varias consultas por hora): el caché AHORRA mucho.
 - **Con tráfico muy bajo** (pocas consultas al día): puede costar más de lo que ahorra

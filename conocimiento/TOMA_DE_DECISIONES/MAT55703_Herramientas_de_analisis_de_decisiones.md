@@ -12,7 +12,7 @@
 | **Nombre** | Herramientas de análisis de decisiones |
 | **Área de conocimiento** | Toma de decisiones |
 | **Obligatoria** | ✅ Sí |
-| **Obligatoria para** | Maestría en Dirección Estratégica del Talento Humano, Maestría en Estrategia y Dirección de Empresas |
+| **Obligatoria para** | Maestría en Dirección Estratégica del Talento Humano; Maestría en Estrategia y Dirección de Empresas |
 | **Periodo de apertura** | Cada año en Otoño (agosto – diciembre). Ciclos programados 2026–2029: Otoño 2026, Otoño 2027, Otoño 2028, Otoño 2029. |
 | **Nivel técnico** | Intermedio |
 | **Modalidad** | Híbrida |

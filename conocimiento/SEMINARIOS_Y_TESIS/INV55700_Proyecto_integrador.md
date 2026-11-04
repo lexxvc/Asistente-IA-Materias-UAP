@@ -16,7 +16,8 @@
 | **Periodo de apertura** | Cada año en Primavera (enero – mayo) y Otoño (agosto – diciembre). Ciclos programados 2026–2029: Primavera 2026, Otoño 2026, Primavera 2027, Otoño 2027, Primavera 2028, Otoño 2028, Primavera 2029, Otoño 2029. |
 | **Nivel técnico** | Avanzado |
 | **Modalidad** | Híbrida |
-| **Horas fuera de clase / semana** | 10 (requiere aplicación práctica en las organizaciones y resultados) |
+| **Horas fuera de clase / semana** | 10 |
+| **Nota de carga** | Requiere aplicación práctica en las organizaciones y resultados. |
 
 ---
 
