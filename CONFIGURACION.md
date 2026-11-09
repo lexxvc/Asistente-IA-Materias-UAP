@@ -123,14 +123,18 @@ asistente NUNCA debe confirmar costos, horarios o docentes que no están en la b
 
 | Constante | Default | Qué controla |
 |---|---|---|
-| `MODELO` | gemini-2.5-flash | Modelo de Gemini |
+| `MODELO_DEFAULT` | gemini-3.8-flash | Modelo de Gemini (o secret `GEMINI_MODEL` para cambiarlo sin tocar código) |
 | `MAX_PREGUNTAS_SESION` | 20 | Límite anti-abuso por sesión |
 | `MAX_TURNOS_HISTORIAL` | 12 | Mensajes enviados al modelo |
 | `CACHE_TTL_MINUTOS` | 60 | Vida del caché de contexto |
 | `USAR_CACHE` | True | Activa/desactiva caché explícito |
+| `GEMINI_MODEL_RESPALDO` (secret) | vacío | Modelo alterno para el último reintento si el principal está saturado (503) |
 | `MOSTRAR_TOKENS` | True | Contador de tokens bajo el cuadro de pregunta (ponlo en False para alumnos) |
+| `MOSTRAR_ERRORES` | True | Muestra el detalle técnico de errores bajo la respuesta (ponlo en False en producción) |
 
 ### Nota sobre el caché de contexto
+
+> **Tier gratuito:** Google no permite caché explícito (`limit=0`). La app lo detecta en la primera pregunta, lo desactiva y sigue sin él; Gemini aplica igualmente **caché implícito** automático a prompts grandes y repetidos (aparece como "caché" en el contador). El caché explícito solo funciona con facturación activa.
 
 El caché reduce ~90% el costo de tokens de entrada, pero Google cobra
 almacenamiento (~$1 USD por millón de tokens por hora mientras el caché viva).

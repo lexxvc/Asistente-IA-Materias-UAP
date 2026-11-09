@@ -34,7 +34,7 @@ RUTA_BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, RUTA_BASE)
 import base_conocimiento as bc  # noqa: E402
 
-MODELO = "gemini-2.5-flash"
+MODELO = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
 
 
 def normalizar(texto: str) -> str:
@@ -67,7 +67,9 @@ def main():
     if not api_key:
         print("ERROR: define la variable de entorno GEMINI_API_KEY")
         return
-    cliente = genai.Client(api_key=api_key)
+    forzar = os.environ.get("GEMINI_VERTEX", "").lower()
+    vertex = forzar == "true"  # solo keys de Vertex AI (modo express)
+    cliente = genai.Client(api_key=api_key, vertexai=vertex) if vertex else genai.Client(api_key=api_key)
 
     print("Cargando base de conocimiento...")
     config = types.GenerateContentConfig(system_instruction=bc.system_prompt_completo())
@@ -89,17 +91,28 @@ def main():
         historial = [types.Content(role=h["rol"], parts=[types.Part(text=h["texto"])])
                      for h in p.get("historial", [])]
         mensaje = bc.contexto_mensaje(p["pregunta"], p.get("maestria", ""))
-        try:
-            r = cliente.chats.create(model=MODELO, config=config, history=historial).send_message(mensaje)
-            resp = r.text or ""
-            u = r.usage_metadata
-            if u:
-                tokens["entrada"] += u.prompt_token_count or 0
-                tokens["salida"] += u.candidates_token_count or 0
-                tokens["razonamiento"] += u.thoughts_token_count or 0
-        except Exception as e:
-            resp = f"ERROR: {e}"
-        time.sleep(1)  # respetar rate limits
+        resp = ""
+        for intento in range(4):
+            try:
+                r = cliente.chats.create(model=MODELO, config=config, history=historial).send_message(mensaje)
+                resp = r.text or ""
+                u = r.usage_metadata
+                if u:
+                    tokens["entrada"] += u.prompt_token_count or 0
+                    tokens["salida"] += u.candidates_token_count or 0
+                    tokens["razonamiento"] += u.thoughts_token_count or 0
+                break
+            except Exception as e:
+                resp = f"ERROR: {e}"
+                t = str(e)
+                # 503 (saturación) o 429 (límite por minuto del tier gratuito): esperar y reintentar
+                if intento < 3 and ("503" in t or "UNAVAILABLE" in t or "429" in t):
+                    espera = 2 ** (intento + 1) * (8 if "429" in t else 1)
+                    print(f"    reintento en {espera}s ({t[:60]})")
+                    time.sleep(espera)
+                    continue
+                break
+        time.sleep(4)  # respetar el límite de peticiones por minuto del tier gratuito
 
         if not tiene_checks(p):
             estado = "👁️ revisión manual"

@@ -70,13 +70,14 @@ estilos += "</style>"
 st.markdown(estilos, unsafe_allow_html=True)
 
 # ─── Constantes de configuración ─────────────────────────────────────────────
-MODELO = "gemini-2.5-flash"
+MODELO_DEFAULT = "gemini-3.8-flash"   # se puede cambiar con el secret GEMINI_MODEL
 MAX_TURNOS_HISTORIAL = 12       # mensajes máximos enviados al modelo
-MAX_REINTENTOS = 2
+MAX_REINTENTOS = 3              # reintentos ante saturación del modelo (503) o fallas temporales
 MAX_PREGUNTAS_SESION = 20       # límite anti-abuso por sesión
 CACHE_TTL_MINUTOS = 60          # vida del caché de contexto de Gemini
 USAR_CACHE = True               # poner False para desactivar caché explícito
 MOSTRAR_TOKENS = True           # contador de tokens bajo el cuadro de pregunta
+MOSTRAR_ERRORES = True          # muestra el detalle técnico del error (poner False en producción)
 
 # ─── Carga de base de conocimiento ─────────────────────────────────────────
 # Toda la lógica (índice general, fichas, system prompt, contexto de fecha)
@@ -99,10 +100,17 @@ if not api_key:
 
 @st.cache_resource(show_spinner=False)
 def obtener_cliente(key: str) -> genai.Client:
-    return genai.Client(api_key=key)
+    # Por defecto usa la API de Gemini (Google AI Studio).
+    # Solo para keys de Vertex AI (modo express): secret GEMINI_VERTEX = "true".
+    vertex = str(st.secrets.get("GEMINI_VERTEX", os.environ.get("GEMINI_VERTEX", ""))).lower() == "true"
+    return genai.Client(api_key=key, vertexai=True) if vertex else genai.Client(api_key=key)
 
 
 cliente = obtener_cliente(api_key)
+MODELO = str(st.secrets.get("GEMINI_MODEL", os.environ.get("GEMINI_MODEL", MODELO_DEFAULT)))
+# Modelo de respaldo opcional (secret GEMINI_MODEL_RESPALDO): se usa en el último
+# intento si el principal sigue saturado (503).
+MODELO_RESPALDO = str(st.secrets.get("GEMINI_MODEL_RESPALDO", os.environ.get("GEMINI_MODEL_RESPALDO", ""))).strip()
 
 system_prompt_completo = obtener_system_prompt()
 
@@ -110,6 +118,19 @@ system_prompt_completo = obtener_system_prompt()
 # La base de conocimiento (~55k tokens: índice + 81 fichas) se sube UNA vez al caché de Google.
 # Las siguientes consultas leen del caché a ~10% del precio de entrada normal.
 # El caché expira tras CACHE_TTL_MINUTOS sin recrearse (no cobra storage si expira).
+# En el tier GRATUITO el caché explícito no está permitido (límite 0): la app lo
+# detecta, deja de intentarlo y sigue sin él. Gemini aplica además caché IMPLÍCITO
+# automático a prompts grandes y repetidos (se ve en el contador como "caché").
+@st.cache_resource(show_spinner=False)
+def _estado_cache() -> dict:
+    return {"deshabilitado": False}
+
+
+def _es_error_de_cuota_de_cache(e: Exception) -> bool:
+    t = str(e)
+    return "429" in t or "RESOURCE_EXHAUSTED" in t or "FreeTier" in t or "limit=0" in t
+
+
 @st.cache_resource(ttl=(CACHE_TTL_MINUTOS - 5) * 60, show_spinner=False)
 def obtener_cache_contexto():
     """Crea (o renueva) el caché de contexto compartido por todos los usuarios.
@@ -126,17 +147,33 @@ def obtener_cache_contexto():
             ),
         )
         return cache.name
-    except Exception:
+    except Exception as e:
+        if _es_error_de_cuota_de_cache(e):
+            _estado_cache()["deshabilitado"] = True
+            print("[Asistente UAP] caché explícito no disponible en este plan "
+                  "(tier gratuito): se desactiva y se usa el modo sin caché.", flush=True)
+        else:
+            print(f"[Asistente UAP] sin caché de contexto: {type(e).__name__}: {e}", flush=True)
         return None  # fallback: modo sin caché
 
 
 def configuracion_modelo() -> types.GenerateContentConfig:
     """Usa el caché de contexto si está disponible; si no, manda el system prompt."""
-    if USAR_CACHE:
+    if USAR_CACHE and not _estado_cache()["deshabilitado"]:
         nombre_cache = obtener_cache_contexto()
         if nombre_cache:
             return types.GenerateContentConfig(cached_content=nombre_cache)
     return types.GenerateContentConfig(system_instruction=system_prompt_completo)
+
+
+def _es_saturacion(e: Exception) -> bool:
+    t = str(e)
+    return "503" in t or "UNAVAILABLE" in t or "overloaded" in t.lower() or "high demand" in t
+
+
+def _es_error_de_cache(e: Exception) -> bool:
+    t = str(e).lower()
+    return "cachedcontent" in t or "cached content" in t or "cachedcontents/" in t
 
 
 # ─── Conteo de tokens ───────────────────────────────────────────────────────
@@ -148,7 +185,7 @@ def leer_uso(usage) -> dict:
         "entrada": usage.prompt_token_count or 0,
         "cache": usage.cached_content_token_count or 0,
         "salida": usage.candidates_token_count or 0,
-        # Gemini 2.5 "piensa" antes de responder; esos tokens se cobran como salida
+        # Gemini "piensa" antes de responder; esos tokens se cobran como salida
         "razonamiento": usage.thoughts_token_count or 0,
     }
 
@@ -268,6 +305,8 @@ for i, msg in enumerate(st.session_state.mensajes):
     avatar = "🦁" if msg["role"] == "assistant" else "👤"
     with st.chat_message(msg["role"], avatar=avatar):
         st.markdown(msg["content"])
+        if MOSTRAR_ERRORES and msg.get("error"):
+            st.code(msg["error"][:1500], language=None)
         # Feedback 👍/👎 en cada respuesta del asistente
         if msg["role"] == "assistant":
             fb = st.feedback("thumbs", key=f"fb_{i}")
@@ -340,12 +379,18 @@ if prompt:
         placeholder = st.empty()
         respuesta = ""
         uso = {}
+        error = ""
 
+        saturado = False
         for intento in range(MAX_REINTENTOS + 1):
+            ultimo = intento == MAX_REINTENTOS
+            # En el último intento, si el principal sigue saturado, se usa el respaldo
+            modelo = MODELO_RESPALDO if (ultimo and saturado and MODELO_RESPALDO) else MODELO
+            # El caché pertenece al modelo principal; con el respaldo va sin caché
+            config = (configuracion_modelo() if modelo == MODELO
+                      else types.GenerateContentConfig(system_instruction=system_prompt_completo))
             try:
-                chat = cliente.chats.create(
-                    model=MODELO, config=configuracion_modelo(), history=historial_gemini
-                )
+                chat = cliente.chats.create(model=modelo, config=config, history=historial_gemini)
                 respuesta = ""
                 usage = None
                 for chunk in chat.send_message_stream(prompt_para_modelo):
@@ -356,20 +401,30 @@ if prompt:
                         usage = chunk.usage_metadata
                 placeholder.markdown(respuesta)
                 uso = leer_uso(usage)
+                error = ""
                 break
-            except Exception:
-                # Si el caché expiró o quedó inválido, se recrea en el siguiente intento
-                obtener_cache_contexto.clear()
-                if intento < MAX_REINTENTOS:
-                    time.sleep(1.5 * (intento + 1))
+            except Exception as e:
+                error = f"{type(e).__name__}: {e}"
+                print(f"[Asistente UAP] intento {intento + 1} ({modelo}): {error}", flush=True)
+                saturado = _es_saturacion(e)
+                # Solo si el error es del caché (expiró o es inválido) se recrea
+                if _es_error_de_cache(e):
+                    obtener_cache_contexto.clear()
+                if not ultimo:
+                    # Espera creciente: 2, 4, 8 s (la saturación suele ser momentánea)
+                    time.sleep(2 ** (intento + 1))
                     continue
                 respuesta = (
+                    "⚠️ El servicio de IA está saturado en este momento. "
+                    "Por favor intenta de nuevo en un minuto."
+                    if saturado else
                     "⚠️ Hubo un problema al generar la respuesta. "
                     "Por favor intenta de nuevo en unos segundos."
                 )
                 placeholder.markdown(respuesta)
 
-    st.session_state.mensajes.append({"role": "assistant", "content": respuesta, "uso": uso})
+
+    st.session_state.mensajes.append({"role": "assistant", "content": respuesta, "uso": uso, "error": error})
     for k in st.session_state.tokens_sesion:
         st.session_state.tokens_sesion[k] += uso.get(k, 0)
     log_evento("pregunta", prompt, respuesta)

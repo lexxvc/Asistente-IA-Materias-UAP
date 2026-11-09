@@ -83,7 +83,7 @@ Fichas .md (81)  ──►  base_conocimiento.py
                                 ▼
           System prompt + base (~55k tokens) → caché de contexto de Gemini
                                 │
-Pregunta + [fecha, periodo en curso, maestría] ──►  Gemini 2.5 Flash
+Pregunta + [fecha, periodo en curso, maestría] ──►  Gemini 3.8 Flash
                                 │
                                 ▼
                  Respuesta acotada al catálogo oficial
@@ -230,7 +230,7 @@ Con el caché de contexto, cada consulta lee la base (~55k tokens) a ~10% del pr
 | Componente | Tecnología |
 |---|---|
 | Interfaz | Streamlit |
-| LLM | Google Gemini 2.5 Flash |
+| LLM | Google Gemini 3.8 Flash |
 | SDK | `google-genai` (SDK oficial actual) |
 | Contexto | Base completa + índice general + caché de contexto de Gemini |
 | Base de conocimiento | Archivos Markdown |
